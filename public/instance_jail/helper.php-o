@@ -1,0 +1,192 @@
+<?php
+require_once('../head.inc.php');
+require_once('../cbsd.inc.php');
+
+require_once('../left_menu.inc.php');
+?>
+
+<div class="col-sm-9 col-sm-offset-3 col-md-10 col-md-offset-2 main">
+        <h2 class="sub-header">TaskLog</h2>
+
+<?php
+
+include_once($rp.'/db.php');
+
+
+function forms( $dbfilepath, $helper )
+{
+	$db = new SQLite3($dbfilepath); $db->busyTimeout(5000);
+
+	$query="SELECT idx,group_id,order_id,param,desc,def,cur,new,mandatory,attr,xattr,type FROM forms ORDER BY group_id ASC, order_id ASC";
+
+	$fields = $db->query($query);
+
+	$res=cmd(CBSD_CMD.'freejname');
+
+	if ($res['retval'] != 0 ) {
+		if (!empty($res['error_message']))
+            		echo $res['error_message'];
+	                exit(1);
+	}
+
+	$freejname=$res['message'];
+	?>
+
+	<form class="helperbox" name="<?php echo $helper; ?>" id="<?php echo $helper; ?>" action="helper.php?helper=<?php echo $helper; ?>" method="POST">
+
+	<label for="jname">jname</label>
+	<input type="text" name="newjname" required value="<?php echo $freejname; ?>"/><br>
+
+	<label for="ip4_addr">ip4_addr</label>
+	<input type="text" name="ip4_addr" required value="DHCP" /><br>
+
+	<?php
+
+	while ($row = $fields->fetchArray()) {
+
+		list( $idx , $group_id, $order_id , $param , $desc , $def , $cur , $new , $mandatory , $attr , $xattr , $type ) = $row;
+
+		$tpl=getElement($type);
+
+		$params=array('param','desc','attr','cur');
+
+		$tpl=str_replace('${param}',$param,$tpl);
+
+		foreach($params as $param)
+		{
+			if($param) {
+//				$tpl=str_replace('${'.$param.'}',$param,$tpl);
+				$tpl=str_replace('${'.$param.'}',$$param,$tpl);
+			}
+		}
+
+		$value=$def;
+		if(isset($cur) && !empty($cur)) $value=$cur;
+		$tpl=str_replace('${def}',$value,$tpl);
+
+		$required=($mandatory==1)?' required':'';
+		$tpl=str_replace('${required}',$required,$tpl);
+		echo $tpl;
+	}
+
+	?>
+	<input type="submit" value="Apply"/>
+	<br>
+	</form>
+	<?php
+}
+
+function getElement($el)
+{
+	$tpl='';
+
+	switch($el)
+	{
+		case 'inputbox':
+			$tpl .= '"${desc}" : <input type="text" name="${param}" value="${def}" ${attr}${required} /><br>';
+			break;
+		case 'delimer':
+			$tpl .= '<h1>${desc}</h1>';
+			break;
+	}
+	return $tpl;
+}
+
+
+function setButtons($arr=array())
+{
+	echo '<div class="buttons"><input type="button" value="Apply" /> <input type="button" value="Cancel" /></div>';
+}
+
+
+if (!isset($_GET['helper'])) {
+        echo "Empty helper";
+        exit(0);
+} else {
+        $helper=$_GET['helper'];
+}
+
+$jail_form=$workdir."/formfile/".$helper.".sqlite";
+
+if (!file_exists($jail_form)) {
+	echo "No such module $helper at $jail_form";
+	die();
+}
+
+if (isset($_POST['newjname'])) {
+	$newjname = $_POST['newjname'];
+
+	$db = new SQLite3($jail_form); $db->busyTimeout(5000);
+	$query="SELECT param FROM forms";
+	$fields = $db->query($query);
+
+	$tmpfname = tempnam("/tmp", "HLPR");
+	copy($jail_form, $tmpfname);
+
+	while ($row = $fields->fetchArray()) {
+		list( $param ) = $row;
+
+		$dbnew = new SQLite3($tmpfname); $dbnew->busyTimeout(5000);
+
+		if (isset($_POST["$param"])) {
+			$val=$_POST["$param"];
+//			$update = "UPDATE forms SET new = '$val' WHERE param = '$param'";
+//			echo "UPDATE forms SET new='{$val}' WHERE param='{$param}'";
+			$dbnew->exec("UPDATE forms SET new='{$val}' WHERE param='{$param}'");
+		}
+
+		$dbnew->close();
+//		echo $param;
+	}
+
+	echo "tMP: $tmpfname";
+
+	$jname=$newjname;
+	
+	$with_img_helpers="$tmpfname";
+	$runasap="1";
+
+	$path="$workdir/jails/$jname";
+	$host_hostname="$jname.my.domain";
+	$ip4_addr="DHCP";
+	$mount_devfs="1";
+	$allow_mount="1";
+	$allow_devfs="1";
+	$allow_nullfs="1";
+	$mount_fstab="$workdir/jails-fstab/fstab.$jname";
+	$mkhostsfile="1";
+	$devfs_ruleset="4";
+	$ver="native";
+	$baserw="0";
+	$mount_src="0";
+	$mount_obj="0";
+	$mount_kernel="0";
+	$mount_ports="1";
+	$astart="1";
+	$data="$workdir/jails-data/$jname-data";
+	$vnet="0";
+	$applytpl="1";
+	$mdsize="0";
+	$rcconf="$workdir/jails-rcconf/rc.conf_$jname";
+	$floatresolv="1";
+	$pkg_bootstrap="1";
+	$user_pw_root='';
+	$interface="auto";
+	$jailskeldir="$workdir/share/FreeBSD-jail-skel";
+	$sysrc_enable="";
+
+	$tpl=getJailTemplate();
+	$file_name='/tmp/'.$newjname.'.jconf';
+	file_put_contents($file_name,$tpl.$userappend);
+
+	$handle=popen("env NOCOLOR=1 /usr/local/bin/sudo /usr/local/bin/cbsd task owner=cbsdweb mode=new /usr/local/bin/cbsd jcreate inter=0 jconf=/tmp/$newjname.jconf", 'r');
+	$read = fgets($handle, 4096);
+	echo "Job Queued: $read";
+	pclose($handle);
+	header( 'Location: jlist.php' ) ;
+	
+	exit(0);
+}
+
+$jail_form=$workdir."/formfile/".$helper.".sqlite";
+forms( $jail_form, $helper );
